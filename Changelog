@@ -1,0 +1,8 @@
+DeDup 0.11:
+Added a second threshold for better noise resilience in periodic low-fps material.
+Allow VFR input.
+Misc fixes.
+Blend is still broken.
+
+DeDup 0.10:
+Initial release.

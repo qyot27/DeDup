@@ -14,10 +14,7 @@
 
 		Original implementation by Donald Graft.
 		Optimizations and improvements by Klaus Post.
-
-		The author can be contacted at:
-		Donald Graft
-		neuron2@attbi.com.
+		Variable framerate modifications by Loren Merritt.
 */
 
 #include "internal.h"
@@ -27,7 +24,7 @@
 #define NORM (235*BLKSIZE*BLKSIZE)
 #define MAX_COPIES 20
 #define DUPVERSION "2.20 beta 1"
-#define MYVERSION "0.1"
+#define MYVERSION "0.11"
 #define VERSION_PRINTF "DeDup %s by Loren Merritt, based on Dup %s by Donald Graft/Klaus Post, Copyright 2004\n", MYVERSION, DUPVERSION
 
 struct FRAMEINFO
@@ -63,20 +60,25 @@ class Dup : public GenericVideoFilter
 {
 public:
 	// In Dedup mode
-    Dup(PClip _child, float _threshold, bool _show, bool _dec, int _maxcopies,
-		int _maxdrops, bool _blend, const char* _logfile, const char* _timefile,
-		const char* _ovrfile, const char* _debugfile, IScriptEnvironment* _env) :
-	    GenericVideoFilter(_child), threshold(_threshold), show(_show), dec(_dec),
+    Dup(PClip _child, float _threshold, float _threshold2, int _range2,
+		float _trigger2, bool _show, bool _dec, int _maxcopies, int _maxdrops,
+		bool _blend, const char* _logfile, const char* _timefile,
+		const char* _timeinfile, const char* _ovrfile, const char* _debugfile,
+		IScriptEnvironment* _env) :
+	    GenericVideoFilter(_child), threshold(_threshold), threshold2(_threshold2),
+		range2(_range2), trigger2(_trigger2), show(_show), dec(_dec),
 		maxcopies(_maxcopies), maxdrops(_maxdrops), blend(_blend), env(_env), pass(2)
 	{
 		if (!vi.IsYUY2() && !vi.IsYV12())
 			env->ThrowError("DeDup: requires YUY2 or YV12 source");
 		if (maxcopies > 20)
 			env->ThrowError("DeDup: maxcopies must be <= 20");
-		if (threshold < 0.0 || threshold > 100.0)
+		if (maxdrops > maxcopies)
+			env->ThrowError("DeDup: maxdrops must be <= maxcopies");
+		if (threshold < 0.0 || threshold > 100.0 || threshold2 < 0.0 || threshold2 > 100.0)
 			env->ThrowError("DeDup: threshold out of range (0.0-100.0)");
-		//if (blend && !dec)
-		//	env->ThrowError("DeDup: blend=true requires dec=true");
+		if (trigger2 <= threshold2 || trigger2 <= threshold)
+			env->ThrowError("DeDup: trigger2 must be > threshold");
 		if (_logfile)
 		{
 			logfile = fopen(_logfile, "r");
@@ -93,6 +95,14 @@ public:
 		}
 		else
 			env->ThrowError("DeDup: option 'times' required");
+		if (_timeinfile)
+		{
+			timeinfile = fopen(_timeinfile, "r");
+			if (timeinfile == NULL)
+				env->ThrowError("DeDup: failed to open timeinfile");
+		}
+		else
+			timeinfile = NULL;
 		if (_ovrfile)
 		{
 			ovrfile = fopen(_ovrfile, "r");
@@ -156,7 +166,7 @@ public:
 		metrics = NULL;
 		keep = NULL;
 		mapend = mapstart = mapinv = NULL;
-		thresholds = NULL;
+		thresholds = threshold2s = trigger2s = NULL;
 
 		/* For safety in case someone came in without doing it. */
 		__asm emms;
@@ -171,6 +181,8 @@ public:
 		if (mapstart)     delete [] mapstart;
 		if (mapinv)       delete [] mapinv;
 		if (thresholds)   delete [] thresholds;
+		if (threshold2s)  delete [] threshold2s;
+		if (trigger2s)    delete [] trigger2s;
 	}
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* _env);
     void isse_scenechange(const BYTE* c_plane, const BYTE* tplane, int height, int width, int pitch,  int t_pitch, int* blk_values);
@@ -179,19 +191,24 @@ public:
 
 private:
 	//// Options
-	float threshold;
+	float threshold, threshold2;
+	int range2;
+	float trigger2;
 	bool show, dec, chroma, blend;
 	int maxcopies;     // max consecutive frames to merge (blend / copy)
 	int maxdrops;      // max consecutive frames to drop
 	bool have_isse;
 	int pass;          // 1 => collect metrics, 2 => decimate
 	FILE* logfile;     // load/save stats for 2 passes
+	FILE* timeinfile;  // load matroska timecodes (vfr input)
 	FILE* timefile;    // save matroska timecodes
 	FILE* ovrfile;     // override calculated dups (or just about any other option)
 	FILE* debugfile;   // report decisions here
 
 	//// Per-frame options
 	float* thresholds;
+	float* threshold2s;
+	float* trigger2s;
 
 	//// State
 	struct FRAMEINFO cache[MAX_COPIES+1];
@@ -254,18 +271,25 @@ void Dup::LoadFirstPass()
 	metrics_done = new bool [num_iframes];
 	keep = new char [num_iframes];
 	mapend = new unsigned int [num_iframes];
-	mapstart = new unsigned int [num_iframes];
+	mapstart = new unsigned int [num_iframes+1];
 	mapinv = new unsigned int [num_iframes];
 	thresholds = new float [num_iframes];
+	threshold2s = new float [num_iframes];
+	trigger2s = new float [num_iframes];
 
 	if(metrics == NULL || keep == NULL || mapend == NULL || mapstart == NULL
-			|| mapinv == NULL || metrics_done == NULL || thresholds == NULL)
-		env->ThrowError("Dup: cannot allocate needed memory");
+			|| mapinv == NULL || metrics_done == NULL || thresholds == NULL
+			|| threshold2s == NULL || trigger2s == NULL)
+		env->ThrowError("DeDup: cannot allocate needed memory");
 
-	memset(metrics_done, 0, num_iframes * sizeof(*metrics_done));
-	memset(keep, 0, num_iframes * sizeof(*keep));
+	memset(metrics_done, 0, num_iframes * sizeof(bool));
+	memset(keep, 0, num_iframes * sizeof(char));
 	for(i=0; i<num_iframes; i++)
+	{
 		thresholds[i] = threshold;
+		threshold2s[i] = threshold2;
+		trigger2s[i] = trigger2;
+	}
 
 	// read stats from first pass
 	char buf[201];
@@ -294,7 +318,7 @@ void Dup::LoadFirstPass()
 	if(ovrfile != NULL)
 	{
 		char* pos;
-		int len;
+		//int len;
 
 		while(fgets(buf, 200, ovrfile))
 		{
@@ -316,26 +340,26 @@ void Dup::LoadFirstPass()
 			while(*pos != '\0')
 			{
 				if(sscanf(pos, "threshold=%f", &thresholds[frame0]))
-					for(i=frame0+1; i<=frame1; i++)
+					for(i=frame0+1; i<=frame1 && i < num_iframes; i++)
 						thresholds[i] = thresholds[frame0];
+				else if(sscanf(pos, "threshold2=%f", &threshold2s[frame0]))
+					for(i=frame0+1; i<=frame1 && i < num_iframes; i++)
+						threshold2s[i] = threshold2s[frame0];
+				else if(sscanf(pos, "trigger2=%f", &trigger2s[frame0]))
+					for(i=frame0+1; i<=frame1 && i < num_iframes; i++)
+						trigger2s[i] = trigger2s[frame0];
 				// word of the form /[kd]+/ forces keep or drop
-				/*
-				else if((len = strspn(pos, "kd")) > 0 && len == strcspn(pos, " \t"))
-					for(i=frame0; i<=frame1; i++)
-						thresholds[i] = (pos[(i-frame0)%len] == 'k') ? -1.0f : 101.0f;
-				*/
-				// FIXME: doesn't check for non-kd words
+				// FIXME: doesn't check for non-kd letters
 				else if(pos[0] == 'k' || pos[0] == 'd')
-					for(j=0, i=frame0; i<=frame1; i++, j++)
+					for(j=0, i=frame0; i<=frame1 && i < num_iframes; i++, j++)
 					{
 						if(pos[j] != 'k' && pos[j] != 'd')
 							j = 0;
 						if(pos[j] == 'k')
-							thresholds[i] = -1.0f;
+							thresholds[i] = threshold2s[i] = -1.0f;
 						else
-							thresholds[i] = 101.0f;
+							thresholds[i] = threshold2s[i] = 101.0f;
 					}
-
 
 				pos += strcspn(pos, " \t");
 				pos += strspn(pos, " \t");
@@ -351,57 +375,145 @@ void Dup::LoadFirstPass()
 	int numdropped = 0;
 	for(i=0; i<num_iframes; i++)
 	{
-		mapend[num_oframes] = i;
 		numdropped++;
-		if(metrics[i].metric > thresholds[i])
+
+		// dual threshold
+		if(range2 > 0)
 		{
-			keep[i] = KEPT_THRESH;
+			float neighbor0 = 0., neighbor1 = 0.;
+			for(j = i<range2 ? 0 : i-range2; j<i; j++)
+				if(metrics[j].metric > neighbor0)
+					neighbor0 = metrics[j].metric;
+			for(j = i+range2 > num_iframes-1 ? num_iframes-1 : i+range2; j>i; j--)
+				if(metrics[j].metric > neighbor1)
+					neighbor1 = metrics[j].metric;
+			if(neighbor1 < neighbor0)
+				neighbor0 = neighbor1;
+			if(neighbor0 > thresholds[i])
+			{
+				float ratio = (neighbor0 - thresholds[i]) / (trigger2s[i] - thresholds[i]);
+				ratio = ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
+				thresholds[i] = threshold2s[i] * ratio + thresholds[i] * (1-ratio);
+			}
+		}
+
+		int status = DROPPED;
+		if(metrics[i].metric > thresholds[i])
+			status = KEPT_THRESH;
+		else if(numdropped > maxcopies)
+			status = KEPT_MAXCOPIES;
+
+		if(status != DROPPED)
+		{
+			keep[i] = status;
+			mapend[num_oframes] = i;
+			mapstart[num_oframes+1] = i+1;
 			num_oframes++;
+
+			if(numdropped > maxdrops)
+			{
+				int numsplits = 1 + (numdropped-1) / maxdrops;
+				for(int j=1; j<numsplits; j++)
+				{
+					int k = i - numdropped + (j * numdropped) / numsplits;
+					keep[k] = KEPT_MAXDROPS;
+					mapend[num_oframes] = i;
+					mapstart[num_oframes+1] = i+1;
+					num_oframes++;
+				}
+			}
+
 			numdropped = 0;
-		} else if(numdropped > maxcopies) {
-			keep[i] = KEPT_MAXCOPIES;
-			num_oframes++;
-			numdropped = 0;
-		} else if(numdropped % maxdrops == 0) {
-			keep[i] = KEPT_MAXDROPS;
-			num_oframes++;
 		}
 	}
 	if(dec)
 		vi.num_frames = num_oframes;
 
-	// correct the sources of frames kept due to maxdrops
-	int blendstart = 0;
-	for(i=0; i<num_oframes; i++)
+	// calc i<->o mappings ignoring maxdrops
+	for(i=j=0; i<num_iframes; i++)
 	{
-		mapstart[i] = blendstart;
-		if(keep[mapend[i]] && keep[mapend[i]] != KEPT_MAXDROPS)
-			blendstart = mapend[i]+1;
+		mapinv[i] = j;
+		if(keep[i])
+			j++;
 	}
-	for(i=num_oframes-2; i>0; i--)
-		if(keep[mapend[i]] == KEPT_MAXDROPS)
-			mapend[i] = mapend[i+1];
-	for(i=j=0; i<num_oframes; i++)
-		for(; j<=mapend[i]; j++)
-			mapinv[j] = i;
 
 	// calc timestamps
-	double mspf = 1000. * double(vi.fps_denominator) / vi.fps_numerator;
-	fprintf(timefile, "# timecode format v2\n");
-	fprintf(timefile, "%.6f\n", 0.0f);
-	for(i=1; i<num_iframes; i++)
-		if(keep[i-1])
-			fprintf(timefile, "%.6lf\n", i * mspf);
+	double* timestamps = new double [num_iframes]; // beginning of the frame, in ms
+	if(timeinfile)
+	{
+		unsigned int frame0, frame1;
+		double globalfps, rangefps;
+		unsigned int i = 0;
+		double time = 0.;
+		fgets(buf, 200, timeinfile);
+		if(strncmp(buf, "# timecode format v1", 20) == 0)
+		{
+			fgets(buf, 200, timeinfile);
+			if(!sscanf(buf, "assume %lf", &globalfps) && !sscanf(buf, "Assume %lf", &globalfps)
+					|| globalfps <= 0)
+				env->ThrowError("DeDup: timeinfile: no assume fps line");
+			while(fgets(buf, 200, timeinfile))
+			{
+				if(buf[0] == '#' || buf[strspn(buf, " \t\r\n")] == '\0')
+					continue;
+				if(sscanf(buf, "%u,%u,%lf", &frame0, &frame1, &rangefps) < 3)
+					env->ThrowError("DeDup: timeinfile: can't parse line");
+				if(frame1 < frame0 || rangefps <= 0)
+					env->ThrowError("DeDup: timeinfile: inconsisten data");
+				for(; i < frame0; i++)
+				{
+					timestamps[i] = time;
+					time += 1000. / globalfps;
+				}
+				for(; i <= frame1; i++)
+				{
+					timestamps[i] = time;
+					time += 1000. / rangefps;
+				}
+			}
+			for(; i < num_iframes; i++)
+			{
+				timestamps[i] = time;
+				time += 1000. / globalfps;
+			}
+		}
+		else if(strncmp(buf, "# timecode format v2", 20) == 0)
+		{
+			for(i = 0; i < num_iframes; i++)
+			{
+				if(!fgets(buf, 200, timeinfile))
+					env->ThrowError("DeDup: timeinfile doesn't contain enough timestamps");
+				if(buf[0] == '#' || buf[strspn(buf, " \t\r\n")] == '\0')
+					continue;
+				if(sscanf(buf, "%lf", &timestamps[i]) < 1)
+					env->ThrowError("DeDup: timeinfile not a valid Matroska timecode v2 file");
+			}
+		}
+	} // end if timeinfile
+	else
+	{
+		double mspf = 1000. * double(vi.fps_denominator) / vi.fps_numerator;
+		for(i=0; i<num_iframes; i++)
+			timestamps[i] = i * mspf;
+	}
 
+	// print timestamps
+	fprintf(timefile, "# timecode format v2\n");
+	fprintf(timefile, "%.6lf\n", 0.);
+	for(i=0; i<num_iframes-1; i++)
+		if(keep[i])
+			fprintf(timefile, "%.6lf\n", timestamps[i+1]);
 	fclose(timefile);
 	timefile = NULL;
 
 	if(debugfile)
 	{
 		fprintf(debugfile, VERSION_PRINTF);
-		fprintf(debugfile, "\ninframe (outframe): kept?   metric <> threshold\n");
+		fprintf(debugfile, "\ninframe (outframe) @ time: kept?   metric <> threshold\n");
 		for(i=0; i<num_iframes; i++)
-			fprintf(debugfile, "%d (%d): %d   %.4f%% %c %.4f%%\n", i, mapinv[i], keep[i], metrics[i].metric, keep[i] == KEPT_THRESH ? '>' : '<', thresholds[i]);
+			fprintf(debugfile, "%d (%d) @ %.2fs: %d   %.4f%% %c %.4f%%\n",
+					i, mapinv[i], timestamps[i] / 1000., keep[i], metrics[i].metric,
+					keep[i] == KEPT_THRESH ? '>' : '<', thresholds[i]);
 
 		fclose(debugfile);
 		debugfile = NULL;
@@ -413,7 +525,7 @@ void Dup::CalcMetric(int n)
 	if(metrics_done[n])
 		return;
 
-	if(n < num_iframes-1)
+	if(n < (int)num_iframes-1)
 	{
 		// compare frame n to n+1
 		cache[0] = LoadFrame(n);
@@ -893,7 +1005,10 @@ void Dup::DrawBox(PVideoFrame& frame, int box_x, int box_y, bool crossp)
 
 AVSValue __cdecl Create_DeDup(AVSValue args, void* user_data, IScriptEnvironment* env)
 {
-	float threshold = 1;
+	float threshold = .5;
+	float threshold2 = 1.;
+	int range2 = 0;
+	float trigger2 = 5.;
 	bool show = false;
 	bool dec = true;
 	int  maxcopies = 12;
@@ -901,20 +1016,25 @@ AVSValue __cdecl Create_DeDup(AVSValue args, void* user_data, IScriptEnvironment
 	bool blend = false;
 	char* logfile = NULL;
 	char* timefile = NULL;
+	char* timeinfile = NULL;
 	char* ovrfile = NULL;
 	char* debugfile = NULL;
 
     return new Dup(args[0].AsClip(),
-		args[1].AsFloat(threshold),		// threshold for duplicate declaration
-		args[2].AsBool(show),			// show biggest difference area
-		args[3].AsBool(dec),			// decimate
-		args[4].AsInt(maxcopies),		// max successive copies to emit
-		args[5].AsInt(maxdrops),		// max successive frames to drop
-		args[6].AsBool(blend),			// blend the duplicates
-		args[7].AsString(logfile),		// save metrics
-		args[8].AsString(timefile),		// save timecodes
-		args[9].AsString(ovrfile),		// save timecodes
-		args[10].AsString(debugfile),	// save timecodes
+	(float)args[1].AsFloat(threshold),  // threshold for duplicate declaration
+	(float)args[2].AsFloat(threshold2), // threshold when a pattern is detected
+		args[3].AsInt(range2),          // range to search for decimate pattern
+	(float)args[4].AsFloat(trigger2),   // what counts as a pattern
+		args[5].AsBool(show),           // show biggest difference area
+		args[6].AsBool(dec),            // decimate
+		args[7].AsInt(maxcopies),       // max successive copies to emit
+		args[8].AsInt(maxdrops),        // max successive frames to drop
+		args[9].AsBool(blend),          // blend the duplicates
+		args[10].AsString(logfile),     // save metrics
+		args[11].AsString(timefile),    // save timecodes
+		args[12].AsString(timeinfile),  // load timecodes
+		args[13].AsString(ovrfile),     // override per-frame settings
+		args[14].AsString(debugfile),   // output decisions
 		env);
 }
 
@@ -924,8 +1044,8 @@ AVSValue __cdecl Create_DupMetric(AVSValue args, void* user_data, IScriptEnviron
 	char* logfile = NULL;
 
     return new Dup(args[0].AsClip(),
-		args[1].AsBool(chroma),			// use chroma in differencing
-		args[2].AsString(logfile),		// save metrics
+		args[1].AsBool(chroma),         // use chroma in differencing
+		args[2].AsString(logfile),      // save metrics
 		env);
 }
 
@@ -1216,7 +1336,7 @@ outloop:
 
 extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit2(IScriptEnvironment* env)
 {
-    env->AddFunction("DeDup", "c[threshold]f[show]b[dec]b[maxcopies]i[maxdrops]i[blend]b[log]s[times]s[ovr]s[debug]s", Create_DeDup, 0);
+    env->AddFunction("DeDup", "c[threshold]f[threshold2]f[range2]i[trigger2]f[show]b[dec]b[maxcopies]i[maxdrops]i[blend]b[log]s[times]s[timesin]s[ovr]s[debug]s", Create_DeDup, 0);
 	env->AddFunction("DupMC", "c[chroma]b[log]s", Create_DupMetric, 0);
     return 0;
 }

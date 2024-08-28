@@ -1,7 +1,7 @@
-DeDup 0.1 by Loren Merritt, Copyright 2004
+DeDup 0.11 by Loren Merritt, Copyright 2004
 based on Dup 2.20 beta 1 by Donald Graft/Klaus Post
 
-DeDup is an Avisynth filter, intended to remove duplicate frames in the
+DeDup is an Avisynth 2.5 filter, intended to remove duplicate frames in the
 interest of compression quality and speed. In some cases, it can also reduce
 noise or compression artifacts in the source.
 
@@ -54,16 +54,33 @@ It only generates the log file.
 
 Second Pass Options:
 
-DeDup(clip c, float threshold, bool show, bool dec,
-      int maxcopies, int maxdrops, bool blend,
-      string log, string times, string ovr, string debug)
+DeDup(clip c, float threshold, float threshold2, int range2, float trigger2,
+	  bool show, bool dec, int maxcopies, int maxdrops, bool blend,
+      string log, string times, string timesin, string ovr, string debug)
 
 threshold:
 	range: 0 - 100
-	default: 1.0
+	default: 0.5
 	Consecutive frames that differ by less that this much will be merged into
 	a single output frame, taken from the end of the merged sequence.
 	(This uses the same units as in Dup)
+
+threshold2:
+	range: 0 - 100
+	default: 1.0 (but disabled due to range2)
+	Use this instead of threshold if there are nearby high-motion frames in
+	both directions. (Actually, linearly interpolate between threshold and
+	threshold2 based on the amount of motion.)
+
+range2:
+	range: 0 - lots (sane values: 0 - maxcopies)
+	default: 0 (disabled)
+	Search range for threshold2.
+
+trigger2:
+	range: 0 - 100
+	default: 5.0
+	What counts as "high-motion" for threshold2.
 
 show:
 	default: false
@@ -101,6 +118,11 @@ times:
 	default: none. required.
 	File to write matroska timecodes to.
 
+timesin:
+	default: none.
+	Read timestamps for a VFR input.
+	Matroska timecode formats v1 and v2 accepted.
+
 ovr:
 	default: none.
 	File to override settings on a per-frame basis. See below for format.
@@ -135,12 +157,15 @@ A string matching /[kd]+/:
 	The string of [kd]s will be repeated as necessary to fill the frame range.
 
 threshold=%f
-	This is the same as the global threshold option.
-
+threshold2=%f
+trigger2=%f
+	These are the same as the global options.
 
 
 
 Tips:
 	If you're doing other CPU-intensive filtering before DeDup, you can save
 time (at the cost of space) by saving the first pass to a huffyuv, and then
-running the secong pass from that, instead of repeating the other filters.
+running the second pass from that, instead of repeating the other filters.
+	Don't set threshold too high (unless maxcopies is small):
+Unlike the original Dup, I don't do sanity checking on slow zooms/pans/fades.

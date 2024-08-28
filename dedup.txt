@@ -1,0 +1,146 @@
+DeDup 0.1 by Loren Merritt, Copyright 2004
+based on Dup 2.20 beta 1 by Donald Graft/Klaus Post
+
+DeDup is an Avisynth filter, intended to remove duplicate frames in the
+interest of compression quality and speed. In some cases, it can also reduce
+noise or compression artifacts in the source.
+
+DeDup differs from Dup in that it completely drops the duplicate frames,
+rather than keeping several copies of each in the output stream. Then, to
+compensate for the dropped frames, DeDup outputs a Matroska-compatible
+timecode file to put the remaining frames back in the right places.
+
+This is a two pass filter. While my algorithm could work with one pass, it
+wouldn't fit in the Avisynth API.
+
+
+
+Usage example:
+
+--- first pass ---
+
+LoadPlugin("DeDup.dll")
+AVISource("blah.avi")
+DupMC(log="blah.dup.txt")
+
+-------------------
+--- second pass ---
+
+LoadPlugin("DeDup.dll")
+AVISource("blah.avi")
+DeDup(threshold=1.0, maxcopies=10, maxdrops=4, log="blah.dup.txt", times="blah.times.txt")
+
+-------------------
+
+
+
+First Pass Options:
+
+DupMC(clip c, bool chroma, string log)
+
+chroma:
+	default: true
+	Use chroma planes when calculating differences.
+	(This is the same as in Dup)
+
+log:
+	default: none. required.
+	File name to save dup metrics for the second pass.
+
+DupMC does not modify the frames passed through it.
+It only generates the log file.
+
+
+
+Second Pass Options:
+
+DeDup(clip c, float threshold, bool show, bool dec,
+      int maxcopies, int maxdrops, bool blend,
+      string log, string times, string ovr, string debug)
+
+threshold:
+	range: 0 - 100
+	default: 1.0
+	Consecutive frames that differ by less that this much will be merged into
+	a single output frame, taken from the end of the merged sequence.
+	(This uses the same units as in Dup)
+
+show:
+	default: false
+	Print diagnostic information into each frame.
+
+dec:
+	default: true
+	Drop frames. Without this, DeDup won't do much. But you might want to
+	disable this with show=true, to see the frames that would be dropped.
+
+maxcopies:
+	range: 1 - 20
+	default: 12
+	Break any string of duplicates longer than this.
+	(This is the same as in Dup)
+
+maxdrops:
+	range: 1 - maxcopies
+	default: 3
+	Break any string of drops longer than this.
+	Don't set this above 4-5 if you want to display subtitles, because many media
+	players can't update the subtitles until they get a new video frame.
+
+blend:
+	default: false
+	Instead of keeping the last frame from a string of dupes, take the average
+	of all the frames in the string.
+	(This would be the same as in Dup, but it's currently broken)
+
+log:
+	default: none. required.
+	The same file you created in the first pass.
+
+times:
+	default: none. required.
+	File to write matroska timecodes to.
+
+ovr:
+	default: none.
+	File to override settings on a per-frame basis. See below for format.
+
+debug:
+	default: none.
+	File to write the same information as with show=true.
+
+
+
+Override File Format:
+Example:
+
+  0-350 threshold=.5
+350-900 threshold=1
+100 k
+200-220 ddk
+
+
+Any line not beginning with a frame number is ignored as a comment.
+Each line is of the format:
+	startframe-endframe option [more options]
+or
+	frame option [more options]
+
+Option overrides accepted:
+
+A string matching /[kd]+/:
+	This forces the frame(s) to be (k) kept or (d) considered dups.
+	Forcing a dup does not necessarily cause that frame to be dropped;
+	it's still subject to maxdrops.
+	The string of [kd]s will be repeated as necessary to fill the frame range.
+
+threshold=%f
+	This is the same as the global threshold option.
+
+
+
+
+Tips:
+	If you're doing other CPU-intensive filtering before DeDup, you can save
+time (at the cost of space) by saving the first pass to a huffyuv, and then
+running the secong pass from that, instead of repeating the other filters.

@@ -1,4 +1,4 @@
-DeDup 0.14 by Loren Merritt, Copyright 2004
+DeDup 0.16 by Loren Merritt, Copyright 2004
 based on Dup 2.20 beta 1 by Donald Graft/Klaus Post
 
 DeDup is an Avisynth 2.5 filter, intended to remove duplicate frames in the
@@ -28,7 +28,7 @@ DupMC(log="blah.dup.txt")
 
 LoadPlugin("DeDup.dll")
 AVISource("blah.avi")
-DeDup(threshold=0.5, maxcopies=10, maxdrops=4, log="blah.dup.txt", times="blah.times.txt")
+DeDup(threshold=0.3, maxcopies=10, maxdrops=3, log="blah.dup.txt", times="blah.times.txt")
 
 -------------------
 
@@ -65,14 +65,14 @@ DeDup(clip c, float threshold, float threshold2, int range2, float trigger2,
 
 threshold:
 	range: 0 - 100
-	default: 0.5
+	default: 0.3
 	Consecutive frames that differ by less than or equal to this much will be
 	merged into a single output frame, taken from the end of the merged sequence.
 	(This uses the same units as in Dup)
 
 threshold2:
 	range: 0 - 100
-	default: 1.0 (but disabled due to range2)
+	default: 0.5 (but disabled due to range2)
 	Use this instead of threshold if there are nearby high-motion frames in
 	both directions. (Actually, linearly interpolate between threshold and
 	threshold2 based on the amount of motion.)
@@ -100,30 +100,33 @@ maxcopies:
 	range: 1 - 20
 	default: 12
 	Break any string of duplicates longer than this.
-	(This is the same as in Dup)
+	(This is the same as in Dup.)
 
 maxdrops:
 	range: 1 - maxcopies
 	default: 3
-	Break any string of drops longer than this.
-	Don't set this above 4 or so if you want to display subtitles, because many
+	Max input to output frame ratio.
+	(So maxdrops=1 means no dropped frames (like the original Dup),
+	maxdrops=3 means a max of 2 consecutive dropped frames.)
+	Don't set this above 3-4 or so if you want to display subtitles, because many
 	media players can't update the subtitles until they get a new video frame.
 
-blend: (BROKEN)
-	default: false
-	Instead of keeping the last frame from a string of dupes, take the average
-	of all the frames in the string.
-	(This would be the same as in Dup, but it's currently broken)
+decwhich:
+	Which frame from a run of duplicates do we keep?
+	0: first frame
+	1: middle, round down
+	2: middle, round up (default)
+	3: last
 
 log:
 	default: none.
+	The file created in the first pass with DupMC().
 	Required, unless you want to specify every frame with ovr.
-	The same file you created in the first pass.
 
 times:
 	default: none.
 	File to write matroska timecodes to.
-	Not strictly required, but you'll need it in order to mux.
+	Not strictly required, but you'll need it for muxing unless maxdrops=1.
 
 timesin:
 	default: none.
@@ -193,7 +196,7 @@ Tips:
 (at the cost of space) by saving the first pass (with DupMC) to a huffyuv,
 and then run the second pass (with DeDup) from that, instead of repeating
 the other filters.
-	Don't set threshold too high (unless maxcopies is small):
+	Don't set threshold too high (especially if maxcopies is large):
 Unlike the original Dup, I don't do sanity checking on slow zooms/pans/fades.
 	The second pass options 'times' and 'debug' take effect as soon as you
 open the avs. You don't have to play/encode the whole video in order to produce

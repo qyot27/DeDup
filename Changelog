@@ -1,6 +1,9 @@
+DeDup 0.16 (2004-9-16):
+Now keeps the middle frame instead of the last frame in a run of length>2.
+(Set decwhich=3 for the old behaviour.)
+
 DeDup 0.15 (2004-7-18):
-Fixed an off-by-1 in printing timestamps.
-Added Yatta-like neighborhood display.
+Added a neighborhood display when show=true.
 
 DeDup 0.14 (2004-6-5):
 Fixed crash on show=true.

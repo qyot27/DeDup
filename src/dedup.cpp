@@ -137,8 +137,7 @@ public:
         else
             debugfile = NULL;
 
-        if (env->GetCPUFlags() & CPUF_INTEGER_SSE) have_isse = true;
-        else have_isse = false;
+        if (env->GetCPUFlags() & CPUF_INTEGER_SSE) have_isse = false;
         copyframe = env->NewVideoFrame(vi);
         cache_out.frame_no = -1;
 
@@ -147,9 +146,6 @@ public:
 
         num_iframes = vi.num_frames;
         sum = NULL;
-
-        /* For safety in case someone came in without doing it. */
-        __asm emms;
 
         LoadFirstPass();
     }
@@ -174,8 +170,7 @@ public:
         //if (_search > MAX_COPIES)
         //	env->ThrowError("DeDup: 'search' must be <= %d", MAX_COPIES);
 
-        if (env->GetCPUFlags() & CPUF_INTEGER_SSE) have_isse = true;
-        else have_isse = false;
+        if (env->GetCPUFlags() & CPUF_INTEGER_SSE) have_isse = false;
 
         xblocks = (vi.width + BLKSIZE - 1) / BLKSIZE;
         yblocks = (vi.height + BLKSIZE - 1) / BLKSIZE;
@@ -189,9 +184,6 @@ public:
         metrics = NULL;
         keep = NULL;
         mapend = mapstart = mapinv = NULL;
-
-        /* For safety in case someone came in without doing it. */
-        __asm emms;
     }
     ~Dup()
     {
@@ -1195,290 +1187,6 @@ AVSValue __cdecl Create_DupMetric(AVSValue args, void* user_data, IScriptEnviron
         args[2].AsString(logfile),      // save metrics
         args[3].AsInt(search),          // compare frames up to this far apart
         env);
-}
-
- /***
-  * Accumulated differences of two planes.
-  *
-  * This routine is for testing luma planes.
-  * The accumulated differences for each 32x32 box is written directly to blk_values.
-  * Boxes not fitting within mod32 width sizes are filled with '0'.
-  * (c) 2002, Donald Graft (algorithm)
-  * (c) 2003, Klaus Post (ISSE code)
-  ***/
-
-
-void Dup::isse_scenechange(const BYTE* c_plane, const BYTE* tplane, int height, int width, int pitch, int t_pitch, int* blk_values) {
-  //__declspec(align(8)) static int64_t full = 0xffffffffffffffffi64;
-  int wp=(width/BLKSIZE)*BLKSIZE;
-  int hp=(height/BLKSIZE)*BLKSIZE;
-  int pad_blk=(wp-width!=0);
-
-  int y=0;
- __asm {
-    mov esi, c_plane
-    mov edi, tplane
-    mov ebx,0
-    jmp yloopover
-    align 16
-yloop:
-    mov eax,[pad_blk]
-    cmp eax,0
-    je no_pad
-    mov eax,blk_values
-    mov [eax],0
-    add eax,4
-    mov blk_values,eax
-no_pad:
-
-    mov ebx, [y]
-    mov edx, pitch    //copy pitch
-    mov ecx, t_pitch    //copy pitch
-    add ebx, 32
-    shl edx,5
-    shl ecx,5
-    add edi,ecx     // add pitch to both planes
-    add esi,edx
-    mov y, ebx
-yloopover:
-    cmp ebx,[hp]
-    jge endframe
-    xor ebx, ebx  // X pos.
-    align 16
-xloop:
-    cmp ebx,[wp]
-    jge yloop
-    mov eax,ebx       // Width (esi)
-    mov ecx,ebx       // Width (edi)
-
-    pxor mm6,mm6   // We maintain two sums, for better pairablility
-    pxor mm7,mm7
-    mov edx, 32
-y_loop_inner:
-    movq mm0,[esi+eax]
-     movq mm2,[esi+eax+8]
-    movq mm1,[edi+ecx]
-     movq mm3,[edi+ecx+8]
-    psadbw mm0,mm1    // Sum of absolute difference
-     psadbw mm2,mm3
-    paddd mm6,mm0     // Add...
-     paddd mm7,mm2
-    movq mm0,[esi+eax+16]
-     movq mm2,[esi+eax+24]
-    movq mm1,[edi+ecx+16]
-     movq mm3,[edi+ecx+24]
-    psadbw mm0,mm1
-     psadbw mm2,mm3
-    paddd mm6,mm0
-     paddd mm7,mm2
-
-    add eax,pitch
-    add ecx,t_pitch
-
-    dec edx
-    jnz y_loop_inner
-
-    mov eax,blk_values
-    paddd mm6,mm7
-    movd [eax],mm6
-    add eax,4
-    mov blk_values,eax
-
-    add ebx,32
-    jmp xloop
-
-endframe:
-    emms
-  }
-}
-
- /***
-  * Accumulated differences of two planes.
-  *
-  * This routine is for testing chroma planes.
-  * The accumulated differences for each 16x16 box is ADDED to the current values.
-  * (c) 2002, Donald Graft (algorithm)
-  * (c) 2003, Klaus Post (ISSE code)
-  ***/
-
-void Dup::isse_scenechange_16(const BYTE* c_plane, const BYTE* tplane, int height, int width, int pitch, int t_pitch, int* blk_values) {
-//  __declspec(align(8)) static int64_t full = 0xffffffffffffffffi64;
-  int wp=(width/16)*16;
-  int hp=(height/16)*16;
-  int y=0;
-  int pad_blk=(wp-width!=0);
- __asm {
-    mov esi, c_plane
-    mov edi, tplane
-    mov ebx,0
-    jmp yloopover
-    align 16
-yloop:
-    mov eax,[pad_blk]
-    cmp eax,0
-    je no_pad
-    mov eax,blk_values
-    mov [eax],0
-    add eax,4
-    mov blk_values,eax
-no_pad:
-    mov ebx, [y]
-    mov edx, pitch    //copy pitch
-    mov ecx, t_pitch    //copy pitch
-    add ebx, 16;
-    shl edx,4
-    shl ecx,4
-    add edi,ecx     // add pitch to both planes
-    add esi,edx
-    mov y, ebx
-yloopover:
-    cmp ebx,[hp]
-    jge endframe
-    xor ebx, ebx  // X pos.
-    align 16
-xloop:
-    cmp ebx,[wp]
-    jge yloop
-    mov eax,ebx       // Width (esi)
-    mov ecx,ebx       // Width (edi)
-    pxor mm6,mm6   // We maintain two sums, for better pairablility
-    pxor mm7,mm7
-    mov edx, 16
-y_loop_inner:
-    movq mm0,[esi+eax]
-     movq mm2,[esi+eax+8]
-    movq mm1,[edi+ecx]
-     movq mm3,[edi+ecx+8]
-    psadbw mm0,mm1    // Sum of absolute difference
-     psadbw mm2,mm3
-    paddd mm6,mm0     // Add...
-     paddd mm7,mm2
-
-    add eax,pitch
-    add ecx,t_pitch
-
-    dec edx
-    jnz y_loop_inner
-
-    mov eax,blk_values
-    movd mm5,[eax]
-    paddd mm6,mm7
-    paddd mm6,mm5
-    movd [eax],mm6
-    add eax,4
-    mov blk_values,eax
-
-    add ebx,16
-    jmp xloop
-
-
-    jmp xloop
-endframe:
-    emms
-  }
-}
-
- /**
-  * Blends one line of several frames equally weighed.
-  *
-  * An array of pointers is delivered as source frames.
-  *
-  * "planes" is the number of planes that should be blended.
-  * "div" (divisor) should be multiplied by 32768.
-  * (c) 2003, Klaus Post
-  */
-
-void Dup::mmx_average_planes(BYTE* dst_plane, const BYTE** src_planes, int width_mod8, int planes, int div) {
-  __declspec(align(8)) static int64_t low_ffff = 0x000000000000ffffi64;
-
-  int64_t div64 = (int64_t)(div) | ((int64_t)(div)<<16) | ((int64_t)(div)<<32) | ((int64_t)(div)<<48);
-  div>>=1;
-  int64_t add64 = (int64_t)(div) | ((int64_t)(div)<<32);
-
-  if (planes<=0) return;
-  __asm {
-    mov esi,dst_plane;
-    xor eax,eax          // EAX will be plane offset (all planes).
-    align 16
-testplane:
-    cmp eax, [width_mod8]
-    jge outloop
-
-    movq mm0,[esi+eax]  // Load current frame pixels
-     pxor mm2,mm2        // Clear mm2
-    movq mm6,mm0
-     movq mm7,mm0
-    mov edi,[src_planes];  // Adress of planeP array is now in edi
-    mov ebx,[planes]   // How many planes (this will be our counter)
-    punpcklbw mm6,mm2    // mm0 = lower 4 pixels
-     punpckhbw mm7,mm2     // mm1 = upper 4 pixels
-    lea edi,[edi+ebx*4]
-
-    align 16
-kernel_loop:
-    mov edx,[edi]
-    movq mm4,[edx+eax]      // Load 8 pixels from test plane
-     pxor mm1,mm1
-    movq mm5,mm4
-    punpcklbw mm4,mm1         // mm4 = lower pixels
-     punpckhbw mm5,mm1        // mm5 = upper pixels
-    paddusw mm6,mm4
-     paddusw mm7,mm5
-
-    sub edi,4
-    dec ebx
-    jnz kernel_loop
-     // Multiply (or in reality divides) added values
-    movq mm4,[add64]
-    pxor mm5,mm5
-     movq mm0,mm6
-    movq mm1,mm6
-     punpcklwd mm0,mm5         // low,low
-    movq mm6,[div64]
-    punpckhwd mm1,mm5         // low,high
-     movq mm2,mm7
-    pmaddwd mm0,mm6
-     punpcklwd mm2,mm5         // high,low
-     movq mm3,mm7
-     paddd mm0,mm4
-    pmaddwd mm1,mm6
-     punpckhwd mm3,mm5         // high,high
-     psrld mm0,15
-     paddd mm1,mm4
-    pmaddwd mm2,mm6
-     packssdw mm0, mm0
-     psrld mm1,15
-     paddd mm2,mm4
-    pmaddwd mm3,mm6
-     packssdw mm1, mm1
-     psrld mm2,15
-     paddd mm3,mm4
-    psrld mm3,15
-     packssdw mm2, mm2
-    packssdw mm3, mm3
-     packuswb mm0,mm5
-    packuswb mm1,mm5
-     packuswb mm2,mm5
-    packuswb mm3,mm5
-     movq mm4, [low_ffff]
-    pand mm0, mm4;
-     pand mm1, mm4;
-    pand mm2, mm4;
-     pand mm3, mm4;
-    psllq mm1, 16
-    psllq mm2, 32
-     por mm0,mm1
-    psllq mm3, 48
-    por mm2,mm3
-    por mm0,mm2
-    movq [esi+eax],mm0
-
-    add eax,8   // Next 8 pixels
-    jmp testplane
-outloop:
-    emms
-  }
-
 }
 
 const AVS_Linkage* AVS_linkage;

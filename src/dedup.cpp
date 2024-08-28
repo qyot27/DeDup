@@ -24,8 +24,9 @@
 #define NORM (235*BLKSIZE*BLKSIZE)
 #define MAX_COPIES 20
 #define DUPVERSION "2.20 beta 1"
-#define MYVERSION "0.14"
+#define MYVERSION "0.15"
 #define VERSION_PRINTF "DeDup %s by Loren Merritt, based on Dup %s by Donald Graft/Klaus Post, Copyright 2004\n", MYVERSION, DUPVERSION
+#define SHOW_NEIGHBORS 10 // show the status of this many frames in each direction
 
 struct FRAMEINFO
 {
@@ -55,17 +56,18 @@ enum DROP
 	KEPT_MAXCOPIES,
 	KEPT_THRESH
 };
+static const char* DROP_NAMES = "_dCK";
 
 class Dup : public GenericVideoFilter
 {
 public:
 	// In Dedup mode
-    Dup(PClip _child, float _threshold, float _threshold2, int _range2,
+	Dup(PClip _child, float _threshold, float _threshold2, int _range2,
 		float _trigger2, bool _show, bool _dec, int _maxcopies, int _maxdrops,
 		bool _blend, const char* _logfile, const char* _timefile,
 		const char* _timeinfile, const char* _ovrfile, const char* _debugfile,
 		IScriptEnvironment* _env) :
-	    GenericVideoFilter(_child), threshold(_threshold), threshold2(_threshold2),
+		GenericVideoFilter(_child), threshold(_threshold), threshold2(_threshold2),
 		range2(_range2), trigger2(_trigger2), show(_show), dec(_dec),
 		maxcopies(_maxcopies), maxdrops(_maxdrops), blend(_blend), env(_env), pass(2)
 	{
@@ -136,8 +138,8 @@ public:
 		LoadFirstPass();
 	}
 	// In metric collection mode
-    Dup(PClip _child, bool _chroma, const char* _logfile, IScriptEnvironment* _env) :
-	    GenericVideoFilter(_child), chroma(_chroma), env(_env), pass(1)
+	Dup(PClip _child, bool _chroma, const char* _logfile, int _search, IScriptEnvironment* _env) :
+	    GenericVideoFilter(_child), chroma(_chroma), range2(_search), env(_env), pass(1)
 	{
 		if (!vi.IsYUY2() && !vi.IsYV12())
 			env->ThrowError("DeDup: requires YUY2 or YV12 source");
@@ -150,6 +152,11 @@ public:
 		}
 		else
 			env->ThrowError("DeDup: option 'log' required");
+		if (_search < 1)
+			env->ThrowError("DeDup: 'search' must be >= 1");
+		//// Will enable when I get around to caching
+		//if (_search > MAX_COPIES)
+		//	env->ThrowError("DeDup: 'search' must be <= %d", MAX_COPIES);
 
 		if (env->GetCPUFlags() & CPUF_INTEGER_SSE) have_isse = true;
 		else have_isse = false;
@@ -170,7 +177,7 @@ public:
 		/* For safety in case someone came in without doing it. */
 		__asm emms;
 	}
-    ~Dup()
+	~Dup()
 	{
 		if (sum)          delete [] sum;
 		if (metrics)      delete [] metrics;
@@ -180,10 +187,10 @@ public:
 		if (mapstart)     delete [] mapstart;
 		if (mapinv)       delete [] mapinv;
 	}
-    PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* _env);
-    void isse_scenechange(const BYTE* c_plane, const BYTE* tplane, int height, int width, int pitch,  int t_pitch, int* blk_values);
-    void isse_scenechange_16(const BYTE* c_plane, const BYTE* tplane, int height, int width, int pitch,  int t_pitch, int* blk_values);
-    void mmx_average_planes(BYTE* dst_plane, const BYTE** src_planes, int width_mod8, int planes, int div);
+	PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* _env);
+	void isse_scenechange(const BYTE* c_plane, const BYTE* tplane, int height, int width, int pitch,  int t_pitch, int* blk_values);
+	void isse_scenechange_16(const BYTE* c_plane, const BYTE* tplane, int height, int width, int pitch,  int t_pitch, int* blk_values);
+	void mmx_average_planes(BYTE* dst_plane, const BYTE** src_planes, int width_mod8, int planes, int div);
 
 private:
 	//// Options
@@ -193,7 +200,6 @@ private:
 	bool show, dec, chroma, blend;
 	int maxcopies;     // max consecutive frames to merge (blend / copy)
 	int maxdrops;      // max consecutive frames to drop
-	bool have_isse;
 	int pass;          // 1 => collect metrics, 2 => decimate
 	FILE* logfile;     // load/save stats for 2 passes
 	FILE* timeinfile;  // load matroska timecodes (vfr input)
@@ -202,6 +208,7 @@ private:
 	FILE* debugfile;   // report decisions here
 
 	//// State
+	bool have_isse;
 	struct FRAMEINFO cache[MAX_COPIES+1];
 	int cache_count;
 	PVideoFrame copyframe;
@@ -213,13 +220,13 @@ private:
 	FRAMEMETRIC* metrics; // metrics[i] = diff(i, i+1)
 	bool* metrics_done;   // which metrics have we calculated yet?
 	char* keep;           // keep[i] = (0 => drop, 1 => output due to minframerate, 2 => keep)
-	unsigned int* mapend; // mapend[out_frame] = in_frame (end of blend)
+	unsigned int* mapend; // mapend[out_frame] = in_frame (direct copy, or end of blend)
 	unsigned int* mapstart; // start of blend
 	unsigned int* mapinv; // mapinv[in_frame] = out_frame
 	unsigned int num_iframes, num_oframes; // total frames before and after dropping dups
 
-    int row_size, row_sizeY, row_sizeUV;
-    int height, heightY, heightUV;
+	int row_size, row_sizeY, row_sizeUV;
+	int height, heightY, heightUV;
 
 	//// Methods
 	void LoadFirstPass();
@@ -451,7 +458,6 @@ void Dup::LoadFirstPass()
 	ovrfile = NULL;
 
 	// decide which frames to drop
-	// TODO: replace the original dup algorithm with my dual threshold / neighborhood
 	num_oframes = 0;
 	int numdropped = 0;
 	for(i=0; i<num_iframes; i++)
@@ -526,7 +532,7 @@ void Dup::LoadFirstPass()
 	}
 
 	// calc timestamps
-	double* timestamps = new double [num_iframes]; // beginning of the frame, in ms
+	double* timestamps = new double [num_iframes+1]; // beginning of the frame, in ms
 	if(timeinfile)
 	{
 		unsigned int frame0, frame1;
@@ -562,7 +568,7 @@ void Dup::LoadFirstPass()
 					time += 1000. / rangefps;
 				}
 			}
-			for(; i < num_iframes; i++)
+			for(; i <= num_iframes; i++)
 			{
 				timestamps[i] = time;
 				time += 1000. / globalfps;
@@ -570,7 +576,8 @@ void Dup::LoadFirstPass()
 		}
 		else if(strncmp(buf, "# timecode format v2", 20) == 0)
 		{
-			for(i = 0; i < num_iframes; i++)
+			timestamps[0] = 0;
+			for(i = 1; i <= num_iframes; i++)
 			{
 				if(!fgets(buf, 200, timeinfile))
 					env->ThrowError("DeDup: timeinfile doesn't contain enough timestamps");
@@ -584,7 +591,7 @@ void Dup::LoadFirstPass()
 	else
 	{
 		double mspf = 1000. * double(vi.fps_denominator) / vi.fps_numerator;
-		for(i=0; i<num_iframes; i++)
+		for(i=0; i<=num_iframes; i++)
 			timestamps[i] = i * mspf;
 	}
 
@@ -592,8 +599,8 @@ void Dup::LoadFirstPass()
 	{
 		// print timestamps
 		fprintf(timefile, "# timecode format v2\n");
-		fprintf(timefile, "%.6lf\n", 0.);
-		for(i=0; i<num_iframes-1; i++)
+		//fprintf(timefile, "%.6lf\n", 0.);
+		for(i=0; i<num_iframes; i++)
 			if(keep[i])
 				fprintf(timefile, "%.6lf\n", timestamps[i+1]);
 		fclose(timefile);
@@ -626,27 +633,31 @@ void Dup::CalcMetric(int n)
 	if(metrics_done[n])
 		return;
 
-	if(n < (int)num_iframes-1)
+	// FIXME: save frames (don't rely on Avisynth's cache for large lookahead)
+	cache[0] = LoadFrame(n);
+	for(int skip=1; skip<=range2; skip++)
 	{
-		// compare frame n to n+1
-		cache[0] = LoadFrame(n);
-		cache[0].metric = 0.0;
-		cache[1] = LoadFrame(n+1);
-		cache[1].metric = 0.0;
-		CompareFrames(cache[0], cache[1]);
-	}
-	else
-	{
-		// always keep the last frame
-		cache[0] = LoadFrame(n);
-		cache[0].metric = 100.0;
-		cache[0].highest_x = 0;
-		cache[0].highest_y = 0;
-	}
+		if(n+skip < (int)num_iframes)
+		{
+			// compare frame n to n+skip
+			cache[0].metric = 0.0;
+			cache[1] = LoadFrame(n+skip);
+			cache[1].metric = 0.0;
+			CompareFrames(cache[0], cache[1]);
+		}
+		else
+		{
+			// always keep the last frame
+			cache[0].metric = 100.0;
+			cache[0].highest_x = 0;
+			cache[0].highest_y = 0;
+		}
 
-	fprintf(logfile, "frm %d: diff from frm %d = %2.4f%% at (%d,%d)\n",
-		n, n+1, cache[0].metric, cache[0].highest_x, cache[0].highest_y);
+		fprintf(logfile, "frm %d: diff from frm %d = %2.4f%% at (%d,%d)\n",
+			n, n+skip, cache[0].metric, cache[0].highest_x, cache[0].highest_y);
+	}
 	fflush(logfile);
+	metrics_done[n] = 1;
 }
 
 PVideoFrame Dup::ConstructFrame(int n)
@@ -656,13 +667,12 @@ PVideoFrame Dup::ConstructFrame(int n)
 	int offset_remainY = (vi.height/BLKSIZE)*BLKSIZE;  // yposition the remaining pixels start (lines)
 	int remainX = vi.width&(BLKSIZE-1) + offset_remainX;      // Where do the remaining pixels end? (pixels)
 	int remainY = (vi.height&(BLKSIZE-1)) + offset_remainY;   // Where do the remaining pixels end? (lines)
-
-	int n0, n1, ni;
+	int n0, n1, ni, i;
 
 	if (dec)
 	{
 		n0 = mapstart[n]; // beginning of the run of duplicates
-		ni = n1 = mapend[n];     // end of the run of duplicates
+		ni = n1 = mapend[n];   // end of the run of duplicates
 		/* If blend=true, modify copyframe to be a blend of all the frames in the
 		   string of duplicates. Skip if there's only one frame */
 		if (blend && n0 < n1)
@@ -783,14 +793,18 @@ PVideoFrame Dup::ConstructFrame(int n)
 		sprintf(buf, "Copyright 2004 Loren Merritt/Donald Graft/Klaus Post");
 		DrawString(copyframe, 0, 1, buf);
 		sprintf(buf, "frm %d: diff from frm %d = %2.2f%%", ni, ni+1, metrics[ni].metric);
-		DrawString(copyframe, 0, 3, buf);
-		//if (!dec)
-		//	DrawBox(copyframe, metrics[ni].highest_x, metrics[ni].highest_y, (metrics[ni].metric < threshold));
+		DrawString(copyframe, 0, 2, buf);
 		if (blend && n1 > n0)
 			sprintf(buf, "ofrm %d: blending %d through %d", n, n0, n1);
 		else
 			sprintf(buf, "ofrm %d: using ifrm %d", n, n1);
+		DrawString(copyframe, 0, 3, buf);
+
+		for(i = -SHOW_NEIGHBORS; i <= SHOW_NEIGHBORS; i++)
+			buf[i+SHOW_NEIGHBORS] = (ni+i >= 0 && ni+i < num_iframes) ? DROP_NAMES[keep[ni+i]] : ' ';
+		buf[2*SHOW_NEIGHBORS+1] = '\0';
 		DrawString(copyframe, 0, 4, buf);
+		DrawString(copyframe, SHOW_NEIGHBORS, 5, "^");
 	}
 
 	return copyframe;
@@ -798,7 +812,7 @@ PVideoFrame Dup::ConstructFrame(int n)
 
 void Dup::CompareFrames(FRAMEINFO& frame1, FRAMEINFO& frame0)
 {
-    const unsigned char *srcp, *src0p;
+	const unsigned char *srcp, *src0p;
 	int highest_x, highest_y;
 	int i, j, x, y;
 	int offset_remainX = (vi.width&(~(BLKSIZE-1)));  // Offset into the frame (pixels)
@@ -1120,7 +1134,7 @@ AVSValue __cdecl Create_DeDup(AVSValue args, void* user_data, IScriptEnvironment
 	char* ovrfile = NULL;
 	char* debugfile = NULL;
 
-    return new Dup(args[0].AsClip(),
+	return new Dup(args[0].AsClip(),
 	(float)args[1].AsFloat(threshold),  // threshold for duplicate declaration
 	(float)args[2].AsFloat(threshold2), // threshold when a pattern is detected
 		args[3].AsInt(range2),          // range to search for decimate pattern
@@ -1142,10 +1156,12 @@ AVSValue __cdecl Create_DupMetric(AVSValue args, void* user_data, IScriptEnviron
 {
 	bool chroma = true;
 	char* logfile = NULL;
+	int  search = 1;
 
-    return new Dup(args[0].AsClip(),
+	return new Dup(args[0].AsClip(),
 		args[1].AsBool(chroma),         // use chroma in differencing
 		args[2].AsString(logfile),      // save metrics
+		args[3].AsInt(search),          // compare frames up to this far apart
 		env);
 }
 
@@ -1437,6 +1453,7 @@ outloop:
 extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit2(IScriptEnvironment* env)
 {
     env->AddFunction("DeDup", "c[threshold]f[threshold2]f[range2]i[trigger2]f[show]b[dec]b[maxcopies]i[maxdrops]i[blend]b[log]s[times]s[timesin]s[ovr]s[debug]s", Create_DeDup, 0);
-	env->AddFunction("DupMC", "c[chroma]b[log]s", Create_DupMetric, 0);
+    env->AddFunction("DupMC", "c[chroma]b[log]s[search]i", Create_DupMetric, 0);
     return 0;
 }
+

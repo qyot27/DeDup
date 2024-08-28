@@ -60,7 +60,7 @@ the second pass.
 Second Pass Options:
 
 DeDup(clip c, float threshold, float threshold2, int range2, float trigger2,
-	  bool show, bool dec, int maxcopies, int maxdrops, bool blend,
+      bool show, bool dec, int maxcopies, int maxdrops, bool blend,
       string log, string times, string timesin, string ovr, string debug)
 
 threshold:
@@ -151,7 +151,7 @@ Example:
 
 Any line not beginning with a frame number is ignored as a comment.
 
-There is no notation for 'last frame', aside from using it's realy frame
+There is no notation for 'last frame', aside from using it's real frame
 number. However, it's OK for ranges to extend past the end of the movie.
 
 If two lines override the same property of the same frame, the one later in
@@ -196,5 +196,5 @@ the other filters.
 	Don't set threshold too high (unless maxcopies is small):
 Unlike the original Dup, I don't do sanity checking on slow zooms/pans/fades.
 	The second pass options 'times' and 'debug' take effect as soon as you
-open the avs. You don't have to play/encode the video in order to produce
+open the avs. You don't have to play/encode the whole video in order to produce
 those files.

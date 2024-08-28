@@ -1,6 +1,10 @@
+DeDup 0.15 (2004-7-18):
+Fixed an off-by-1 in printing timestamps.
+Added Yatta-like neighborhood display.
+
 DeDup 0.14 (2004-6-5):
-Fixed crash on show=true
-Added overrides for range2, maxdrops, and maxcopies
+Fixed crash on show=true.
+Added overrides for range2, maxdrops, and maxcopies.
 
 DeDup 0.13 (2004-6-3):
 Fixed crash when logfile is longer than second pass's input video.

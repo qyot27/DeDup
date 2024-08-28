@@ -48,8 +48,9 @@ log:
 	default: none. required.
 	File to save dup metrics for the second pass.
 
-DupMC does not modify the frames passed through it.
-It only generates the log file.
+DupMC does not modify the frames passed through it. It only generates the log.
+There is no harm in seeking during the first pass: The log will be out of order,
+but DeDup doesn't care.
 
 
 

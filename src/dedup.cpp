@@ -24,7 +24,7 @@
 #define NORM (235*BLKSIZE*BLKSIZE)
 #define MAX_COPIES 20
 #define DUPVERSION "2.20 beta 1"
-#define MYVERSION "0.12"
+#define MYVERSION "0.13"
 #define VERSION_PRINTF "DeDup %s by Loren Merritt, based on Dup %s by Donald Graft/Klaus Post, Copyright 2004\n", MYVERSION, DUPVERSION
 
 struct FRAMEINFO
@@ -318,7 +318,10 @@ void Dup::LoadFirstPass()
 		{
 			if(!sscanf(buf, "frm %u: diff from frm %u = %f%% at (%d,%d)", &frame_no, &frame_next, &metric, &highest_x, &highest_y))
 				continue;
+			if(frame_no >= num_iframes)
+				continue;
 			if(frame_next != frame_no+1)
+				// the data might be useful, but I don't know what to do with it
 				continue;
 			metrics[frame_no].metric = metric;
 			metrics[frame_no].highest_x = highest_x;
@@ -578,6 +581,7 @@ void Dup::CalcMetric(int n)
 
 	fprintf(logfile, "frm %d: diff from frm %d = %2.4f%% at (%d,%d)\n",
 		n, n+1, cache[0].metric, cache[0].highest_x, cache[0].highest_y);
+	fflush(logfile);
 }
 
 PVideoFrame Dup::ConstructFrame(int n)
@@ -589,8 +593,6 @@ PVideoFrame Dup::ConstructFrame(int n)
 	int remainY = (vi.height&(BLKSIZE-1)) + offset_remainY;   // Where do the remaining pixels end? (lines)
 
 	int n0, n1, ni;
-
-	PVideoFrame showframe;
 
 	if (dec)
 	{

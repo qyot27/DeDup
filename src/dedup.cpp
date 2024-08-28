@@ -1209,7 +1209,7 @@ AVSValue __cdecl Create_DupMetric(AVSValue args, void* user_data, IScriptEnviron
 
 
 void Dup::isse_scenechange(const BYTE* c_plane, const BYTE* tplane, int height, int width, int pitch, int t_pitch, int* blk_values) {
-  //__declspec(align(8)) static __int64 full = 0xffffffffffffffffi64;
+  //__declspec(align(8)) static int64_t full = 0xffffffffffffffffi64;
   int wp=(width/BLKSIZE)*BLKSIZE;
   int hp=(height/BLKSIZE)*BLKSIZE;
   int pad_blk=(wp-width!=0);
@@ -1302,7 +1302,7 @@ endframe:
   ***/
 
 void Dup::isse_scenechange_16(const BYTE* c_plane, const BYTE* tplane, int height, int width, int pitch, int t_pitch, int* blk_values) {
-//  __declspec(align(8)) static __int64 full = 0xffffffffffffffffi64;
+//  __declspec(align(8)) static int64_t full = 0xffffffffffffffffi64;
   int wp=(width/16)*16;
   int hp=(height/16)*16;
   int y=0;
@@ -1389,11 +1389,11 @@ endframe:
   */
 
 void Dup::mmx_average_planes(BYTE* dst_plane, const BYTE** src_planes, int width_mod8, int planes, int div) {
-  __declspec(align(8)) static __int64 low_ffff = 0x000000000000ffffi64;
+  __declspec(align(8)) static int64_t low_ffff = 0x000000000000ffffi64;
 
-  __int64 div64 = (__int64)(div) | ((__int64)(div)<<16) | ((__int64)(div)<<32) | ((__int64)(div)<<48);
+  int64_t div64 = (int64_t)(div) | ((int64_t)(div)<<16) | ((int64_t)(div)<<32) | ((int64_t)(div)<<48);
   div>>=1;
-  __int64 add64 = (__int64)(div) | ((__int64)(div)<<32);
+  int64_t add64 = (int64_t)(div) | ((int64_t)(div)<<32);
 
   if (planes<=0) return;
   __asm {

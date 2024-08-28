@@ -1,4 +1,4 @@
-DeDup 0.16 by Loren Merritt, Copyright 2004
+DeDup 0.17 by Loren Merritt, Copyright 2004
 based on Dup 2.20 beta 1 by Donald Graft/Klaus Post
 
 DeDup is an Avisynth 2.5 filter, intended to remove duplicate frames in the
@@ -104,10 +104,9 @@ maxcopies:
 
 maxdrops:
 	range: 1 - maxcopies
-	default: 3
+	default: 1 (no dropped frames (like the original Dup))
 	Max input to output frame ratio.
-	(So maxdrops=1 means no dropped frames (like the original Dup),
-	maxdrops=3 means a max of 2 consecutive dropped frames.)
+	(So maxdrops=3 means a max of 2 consecutive dropped frames.)
 	Don't set this above 3-4 or so if you want to display subtitles, because many
 	media players can't update the subtitles until they get a new video frame.
 

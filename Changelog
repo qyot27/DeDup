@@ -1,6 +1,12 @@
+DeDup 0.17 (2004-11-7):
+decwhich<3 was keeping the wrong input frame.
+Improved neighborhood display.
+Changed default maxdrops to 1 (no VFR).
+
 DeDup 0.16 (2004-9-16):
 Now keeps the middle frame instead of the last frame in a run of length>2.
 (Set decwhich=3 for the old behaviour.)
+Reduced default thresh to 0.3
 
 DeDup 0.15 (2004-7-18):
 Added a neighborhood display when show=true.

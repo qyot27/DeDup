@@ -24,7 +24,7 @@
 #define NORM (235*BLKSIZE*BLKSIZE)
 #define MAX_COPIES 20
 #define DUPVERSION "2.20 beta 1"
-#define MYVERSION "0.16"
+#define MYVERSION "0.17"
 #define VERSION_PRINTF "DeDup %s by Loren Merritt, based on Dup %s by Donald Graft/Klaus Post, Copyright 2004\n", MYVERSION, DUPVERSION
 #define SHOW_NEIGHBORS 10 // show the status of this many frames in each direction
 
@@ -135,6 +135,7 @@ public:
 		if (env->GetCPUFlags() & CPUF_INTEGER_SSE) have_isse = true;
 		else have_isse = false;
 		copyframe = env->NewVideoFrame(vi);
+		cache_out.frame_no = -1;
 
 		xblocks = (vi.width+BLKSIZE-1) / BLKSIZE;
 		yblocks = (vi.height+BLKSIZE-1) / BLKSIZE;
@@ -208,7 +209,7 @@ private:
 	int range2;
 	float trigger2;
 	bool show, dec, chroma;
-        int decwhich;      // which of a run of dups to keep
+	int decwhich;      // which of a run of dups to keep
 	int maxcopies;     // max consecutive frames to merge (blend / copy)
 	int maxdrops;      // max consecutive frames to drop
 	int pass;          // 1 => collect metrics, 2 => decimate
@@ -221,6 +222,7 @@ private:
 	//// State
 	bool have_isse;
 	struct FRAMEINFO cache[MAX_COPIES+1];
+	struct FRAMEINFO cache_out;
 	int cache_count;
 	PVideoFrame copyframe;
 	IScriptEnvironment* env;
@@ -307,7 +309,7 @@ void Dup::LoadFirstPass()
 	metrics_done = new bool [num_iframes];
 	keep = new char [num_iframes];
 	mapend = new unsigned int [num_iframes];
-	mapstart = new unsigned int [num_iframes+1];
+	mapstart = new unsigned int [num_iframes];
 	mapinv = new unsigned int [num_iframes];
 
 	if(metrics == NULL || keep == NULL || mapend == NULL || mapstart == NULL
@@ -373,6 +375,9 @@ void Dup::LoadFirstPass()
 
 			pos += strcspn(pos, " \t");
 			pos += strspn(pos, " \t");
+			if(pos[0] == '\0')
+				ThrowError("can't parse override at line %d", linenum);
+
 			while(pos[0] != '\0')
 			{
 				if(pos[0] == '#')
@@ -471,6 +476,7 @@ void Dup::LoadFirstPass()
 	// decide which frames to drop
 	num_oframes = 0;
 	int numdropped = 0;
+	int start = 0;
 	for(i=0; i<num_iframes; i++)
 	{
 		numdropped++;
@@ -510,25 +516,23 @@ void Dup::LoadFirstPass()
 
 		if(status != DROPPED)
 		{
-			keep[i] = status;
-			mapend[num_oframes] = i;
-			mapstart[num_oframes+1] = i+1;
-			num_oframes++;
-
-			if(numdropped > maxdrop)
+			int j;
+			int numsplits = 1 + (numdropped-1) / maxdrops;
+			for(j=0; j<numsplits; j++)
 			{
-				int numsplits = 1 + (numdropped-1) / maxdrops;
-				for(int j=1; j<numsplits; j++)
-				{
-					int k = i - numdropped + (j * numdropped) / numsplits;
-					keep[k] = KEPT_MAXDROPS;
-					mapend[num_oframes] = i;
-					mapstart[num_oframes+1] = i+1;
-					num_oframes++;
-				}
+				mapend[num_oframes] = i;
+				mapstart[num_oframes] = start;
+				num_oframes++;
 			}
+			for(j=1; j<numsplits; j++)
+			{
+				int k = i - numdropped + (j * numdropped) / numsplits;
+				keep[k] = KEPT_MAXDROPS;
+			}
+			keep[i] = status;
 
 			numdropped = 0;
+			start = i+1;
 		}
 	} // End for(i=0; i<num_iframes; i++)
 	if(dec)
@@ -791,7 +795,10 @@ PVideoFrame Dup::ConstructFrame(int n)
 			   : (decwhich == DECW_LAST)  ? n1
 			   : (decwhich == DECW_MIDDLE_DOWN) ? n0 + (n1-n0)/2
 			   : /*(decwhich == DECW_MIDDLE_UP) ?*/ n0 + (n1-n0+1)/2;
-			copyframe = child->GetFrame(nk, env);
+			if(cache_out.frame_no != nk)
+				cache_out = LoadFrame(nk);
+			copyframe = cache_out.frame;
+
 		}
 	} // End if dec
 	else
@@ -799,7 +806,9 @@ PVideoFrame Dup::ConstructFrame(int n)
 		ni = nk = n;
 		n0 = mapstart[mapinv[ni]];
 		n1 = mapend[mapinv[ni]];
-		copyframe = child->GetFrame(n, env);
+		if(cache_out.frame_no != nk)
+			cache_out = LoadFrame(nk);
+		copyframe = cache_out.frame;
 	}
 
 	if (show)
@@ -819,7 +828,7 @@ PVideoFrame Dup::ConstructFrame(int n)
 		DrawString(copyframe, 0, 3, buf);
 
 		for(i = -SHOW_NEIGHBORS; i <= SHOW_NEIGHBORS; i++)
-			buf[i+SHOW_NEIGHBORS] = (ni+i >= 0 && ni+i < (int)num_iframes) ? DROP_NAMES[keep[ni+i]] : ' ';
+			buf[i+SHOW_NEIGHBORS] = (n+i >= 0 && n+i < (int)num_iframes) ? DROP_NAMES[keep[n+i]] : ' ';
 		buf[2*SHOW_NEIGHBORS+1] = '\0';
 		DrawString(copyframe, 0, 4, buf);
 		DrawString(copyframe, SHOW_NEIGHBORS, 5, "^");
@@ -1137,14 +1146,14 @@ void Dup::DrawBox(PVideoFrame& frame, int box_x, int box_y, bool crossp)
 
 AVSValue __cdecl Create_DeDup(AVSValue args, void* user_data, IScriptEnvironment* env)
 {
-	float threshold = 0.3;
-	float threshold2 = 0.5;
+	float threshold = 0.3f;
+	float threshold2 = 0.5f;
 	int range2 = 0;
-	float trigger2 = 5.;
+	float trigger2 = 5.0f;
 	bool show = false;
 	bool dec = true;
 	int  maxcopies = 12;
-	int  maxdrops = 3;
+	int  maxdrops = 1;
 	int  decwhich = DECW_MIDDLE_UP;
 	char* logfile = NULL;
 	char* timefile = NULL;

@@ -22,7 +22,7 @@
 #include <cstring>
 #include <algorithm>
 
-#include "avisynth.h"
+#include <avisynth.h>
 #include "info.h"
 
 #define BLKSIZE 32

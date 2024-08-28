@@ -1,8 +1,12 @@
-DeDup 0.11:
+DeDup 0.12 (2004-6-2):
+Allow no or partial first pass if you override the k/d status of the missing frames.
+Matroska timecode v1 is now compatible with Yatta.
+
+DeDup 0.11 (2004-5-26):
 Added a second threshold for better noise resilience in periodic low-fps material.
-Allow VFR input.
+Support VFR input.
 Misc fixes.
 Blend is still broken.
 
-DeDup 0.10:
+DeDup 0.10 (2004-5-23):
 Initial release.

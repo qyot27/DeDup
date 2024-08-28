@@ -1,4 +1,4 @@
-DeDup 0.11 by Loren Merritt, Copyright 2004
+DeDup 0.12 by Loren Merritt, Copyright 2004
 based on Dup 2.20 beta 1 by Donald Graft/Klaus Post
 
 DeDup is an Avisynth 2.5 filter, intended to remove duplicate frames in the
@@ -28,9 +28,10 @@ DupMC(log="blah.dup.txt")
 
 LoadPlugin("DeDup.dll")
 AVISource("blah.avi")
-DeDup(threshold=1.0, maxcopies=10, maxdrops=4, log="blah.dup.txt", times="blah.times.txt")
+DeDup(threshold=0.5, maxcopies=10, maxdrops=4, log="blah.dup.txt", times="blah.times.txt")
 
 -------------------
+
 
 
 
@@ -45,7 +46,7 @@ chroma:
 
 log:
 	default: none. required.
-	File name to save dup metrics for the second pass.
+	File to save dup metrics for the second pass.
 
 DupMC does not modify the frames passed through it.
 It only generates the log file.
@@ -61,8 +62,8 @@ DeDup(clip c, float threshold, float threshold2, int range2, float trigger2,
 threshold:
 	range: 0 - 100
 	default: 0.5
-	Consecutive frames that differ by less that this much will be merged into
-	a single output frame, taken from the end of the merged sequence.
+	Consecutive frames that differ by less than or equal to this much will be
+	merged into a single output frame, taken from the end of the merged sequence.
 	(This uses the same units as in Dup)
 
 threshold2:
@@ -73,7 +74,7 @@ threshold2:
 	threshold2 based on the amount of motion.)
 
 range2:
-	range: 0 - lots (sane values: 0 - maxcopies)
+	range: 0 - lots (sane values: 0 - maxdrops)
 	default: 0 (disabled)
 	Search range for threshold2.
 
@@ -101,17 +102,18 @@ maxdrops:
 	range: 1 - maxcopies
 	default: 3
 	Break any string of drops longer than this.
-	Don't set this above 4-5 if you want to display subtitles, because many media
-	players can't update the subtitles until they get a new video frame.
+	Don't set this above 4 or so if you want to display subtitles, because many
+	media players can't update the subtitles until they get a new video frame.
 
-blend:
+blend: (BROKEN)
 	default: false
 	Instead of keeping the last frame from a string of dupes, take the average
 	of all the frames in the string.
 	(This would be the same as in Dup, but it's currently broken)
 
 log:
-	default: none. required.
+	default: none.
+	Required, unless you want to specify every frame with ovr.
 	The same file you created in the first pass.
 
 times:
@@ -136,13 +138,20 @@ debug:
 Override File Format:
 Example:
 
-  0-350 threshold=.5
-350-900 threshold=1
+  0-350 threshold=.3
+350-900 threshold=.7 threshold2=1.5 trigger2=8.0
 100 k
 200-220 ddk
 
 
 Any line not beginning with a frame number is ignored as a comment.
+
+There is no notation for 'last frame', aside from using it's realy frame
+number. However, it's OK for ranges to extend past the end of the movie.
+
+If two lines override the same property of the same frame, the one later in
+the ovr file takes precedence.
+
 Each line is of the format:
 	startframe-endframe option [more options]
 or
@@ -152,9 +161,11 @@ Option overrides accepted:
 
 A string matching /[kd]+/:
 	This forces the frame(s) to be (k) kept or (d) considered dups.
+	The string of [kd]s will be repeated as necessary to fill the frame range.
 	Forcing a dup does not necessarily cause that frame to be dropped;
 	it's still subject to maxdrops.
-	The string of [kd]s will be repeated as necessary to fill the frame range.
+	This option modifies thresholds, so put any [kd] option after any relevant
+	threshold override.
 
 threshold=%f
 threshold2=%f
@@ -163,9 +174,11 @@ trigger2=%f
 
 
 
+
 Tips:
-	If you're doing other CPU-intensive filtering before DeDup, you can save
-time (at the cost of space) by saving the first pass to a huffyuv, and then
-running the second pass from that, instead of repeating the other filters.
+	If you're doing other CPU-intensive filtering, you can save time
+(at the cost of space) by saving the first pass (with DupMC) to a huffyuv,
+and then run the second pass (with DeDup) from that, instead of repeating
+the other filters.
 	Don't set threshold too high (unless maxcopies is small):
 Unlike the original Dup, I don't do sanity checking on slow zooms/pans/fades.

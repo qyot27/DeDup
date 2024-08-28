@@ -24,7 +24,7 @@
 #define NORM (235*BLKSIZE*BLKSIZE)
 #define MAX_COPIES 20
 #define DUPVERSION "2.20 beta 1"
-#define MYVERSION "0.11"
+#define MYVERSION "0.12"
 #define VERSION_PRINTF "DeDup %s by Loren Merritt, based on Dup %s by Donald Graft/Klaus Post, Copyright 2004\n", MYVERSION, DUPVERSION
 
 struct FRAMEINFO
@@ -86,7 +86,7 @@ public:
 				env->ThrowError("DeDup: failed to open logfile");
 		}
 		else
-			env->ThrowError("DeDup: option 'log' required");
+			logfile = NULL;
 		if (_timefile)
 		{
 			timefile = fopen(_timefile, "w");
@@ -239,12 +239,31 @@ private:
 	void CopyFrame(PVideoFrame& to, PVideoFrame& from);
 	void DrawBox(PVideoFrame& frame, int box_x, int box_y, bool crossp);
 
-	inline void DrawString(PVideoFrame& dst, int x, int y, const char *s)
-	{
-		if (vi.IsYUY2()) ::DrawStringYUY2(dst, x, y, s);
-		else ::DrawString(dst, x, y, s);
-	}
+	inline void DrawString(PVideoFrame& dst, int x, int y, const char *s);
+	void ThrowError(const char* msg);
+	template<class T> void ThrowError(const char* msg, T arg);
 };
+
+void Dup::DrawString(PVideoFrame& dst, int x, int y, const char *s)
+{
+	if (vi.IsYUY2()) ::DrawStringYUY2(dst, x, y, s);
+	else ::DrawString(dst, x, y, s);
+}
+
+void Dup::ThrowError(const char* msg)
+{
+	env->ThrowError(msg);
+}
+
+template<class T>
+void Dup::ThrowError(const char* msg, T arg)
+{
+	// unsafe: I would use snprintf, but MSVC doesn't have it.
+	// no, I don't ever free buf
+	char* buf = new char[strlen(msg) + 20];
+	sprintf(buf, msg, arg);
+	env->ThrowError(buf);
+}
 
 PVideoFrame __stdcall Dup::GetFrame(int n, IScriptEnvironment* _env)
 {
@@ -266,6 +285,7 @@ void Dup::LoadFirstPass()
 	unsigned int i, j;
 	int highest_x, highest_y;
 	unsigned int frame_no, frame_next;
+	char buf[201];
 
 	metrics = new FRAMEMETRIC [num_iframes];
 	metrics_done = new bool [num_iframes];
@@ -292,27 +312,21 @@ void Dup::LoadFirstPass()
 	}
 
 	// read stats from first pass
-	char buf[201];
-	while(fgets(buf, 200, logfile))
+	if(logfile != NULL)
 	{
-		if(!sscanf(buf, "frm %u: diff from frm %u = %f%% at (%d,%d)", &frame_no, &frame_next, &metric, &highest_x, &highest_y))
-			continue;
-		if(frame_next != frame_no+1)
-			continue;
-		metrics[frame_no].metric = metric;
-		metrics[frame_no].highest_x = highest_x;
-		metrics[frame_no].highest_y = highest_y;
-		metrics_done[frame_no] = true;
+		while(fgets(buf, 200, logfile))
+		{
+			if(!sscanf(buf, "frm %u: diff from frm %u = %f%% at (%d,%d)", &frame_no, &frame_next, &metric, &highest_x, &highest_y))
+				continue;
+			if(frame_next != frame_no+1)
+				continue;
+			metrics[frame_no].metric = metric;
+			metrics[frame_no].highest_x = highest_x;
+			metrics[frame_no].highest_y = highest_y;
+			metrics_done[frame_no] = true;
+		}
+		fclose(logfile);
 	}
-	fclose(logfile);
-	logfile = NULL;
-
-	for(i=0; i<num_iframes; i++)
-		if(!metrics_done[i])
-			// should print frame number?
-			env->ThrowError("DeDup: incomplete first pass");
-	delete [] metrics_done;
-	metrics_done = NULL;
 
 	// read override file
 	if(ovrfile != NULL)
@@ -359,6 +373,7 @@ void Dup::LoadFirstPass()
 							thresholds[i] = threshold2s[i] = -1.0f;
 						else
 							thresholds[i] = threshold2s[i] = 101.0f;
+						metrics_done[i] = true;
 					}
 
 				pos += strcspn(pos, " \t");
@@ -366,8 +381,23 @@ void Dup::LoadFirstPass()
 			}
 		}
 		fclose(ovrfile);
-		ovrfile = NULL;
 	}
+
+	// warn of any holes in the first pass not filled by overrides
+	for(i=0; i<num_iframes; i++)
+		if(!metrics_done[i])
+		{
+			if(logfile == NULL && ovrfile == NULL)
+				env->ThrowError("DeDup: no first pass logfile, nor ovrfile");
+			else if(!logfile)
+				env->ThrowError("DeDup: no first pass logfile, and not all frames overridden");
+			else
+				ThrowError("DeDup: first pass missed frame %d", i);
+		}
+	delete [] metrics_done;
+	metrics_done = NULL;
+	logfile = NULL;
+	ovrfile = NULL;
 
 	// decide which frames to drop
 	// TODO: replace the original dup algorithm with my dual threshold / neighborhood
@@ -377,7 +407,7 @@ void Dup::LoadFirstPass()
 	{
 		numdropped++;
 
-		// dual threshold
+		// dual threshold, for high motion scenes
 		if(range2 > 0)
 		{
 			float neighbor0 = 0., neighbor1 = 0.;
@@ -389,16 +419,16 @@ void Dup::LoadFirstPass()
 					neighbor1 = metrics[j].metric;
 			if(neighbor1 < neighbor0)
 				neighbor0 = neighbor1;
-			if(neighbor0 > thresholds[i])
+			if(neighbor0 > threshold2s[i])
 			{
-				float ratio = (neighbor0 - thresholds[i]) / (trigger2s[i] - thresholds[i]);
+				float ratio = (neighbor0 - threshold2s[i]) / (trigger2s[i] - threshold2s[i]);
 				ratio = ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
 				thresholds[i] = threshold2s[i] * ratio + thresholds[i] * (1-ratio);
 			}
 		}
 
 		int status = DROPPED;
-		if(metrics[i].metric > thresholds[i])
+		if(metrics[i].metric >= thresholds[i])
 			status = KEPT_THRESH;
 		else if(numdropped > maxcopies)
 			status = KEPT_MAXCOPIES;
@@ -442,24 +472,27 @@ void Dup::LoadFirstPass()
 	if(timeinfile)
 	{
 		unsigned int frame0, frame1;
-		double globalfps, rangefps;
-		unsigned int i = 0;
+		double globalfps = -1, rangefps;
+		unsigned int i = 0, linenum = 1;
 		double time = 0.;
 		fgets(buf, 200, timeinfile);
 		if(strncmp(buf, "# timecode format v1", 20) == 0)
 		{
-			fgets(buf, 200, timeinfile);
-			if(!sscanf(buf, "assume %lf", &globalfps) && !sscanf(buf, "Assume %lf", &globalfps)
-					|| globalfps <= 0)
-				env->ThrowError("DeDup: timeinfile: no assume fps line");
 			while(fgets(buf, 200, timeinfile))
 			{
+				linenum++;
 				if(buf[0] == '#' || buf[strspn(buf, " \t\r\n")] == '\0')
 					continue;
+				if(sscanf(buf, "assume %lf", &globalfps)
+				|| sscanf(buf, "Assume %lf", &globalfps))
+					continue;
+				if(globalfps <= 0)
+					env->ThrowError("DeDup: timeinfile: no 'assume fps' line");
+
 				if(sscanf(buf, "%u,%u,%lf", &frame0, &frame1, &rangefps) < 3)
-					env->ThrowError("DeDup: timeinfile: can't parse line");
+					ThrowError("DeDup: timeinfile: can't parse line %u", linenum);
 				if(frame1 < frame0 || rangefps <= 0)
-					env->ThrowError("DeDup: timeinfile: inconsisten data");
+					ThrowError("DeDup: timeinfile: inconsistent data at line %u", linenum);
 				for(; i < frame0; i++)
 				{
 					timestamps[i] = time;
@@ -511,7 +544,7 @@ void Dup::LoadFirstPass()
 		fprintf(debugfile, VERSION_PRINTF);
 		fprintf(debugfile, "\ninframe (outframe) @ time: kept?   metric <> threshold\n");
 		for(i=0; i<num_iframes; i++)
-			fprintf(debugfile, "%d (%d) @ %.2fs: %d   %.4f%% %c %.4f%%\n",
+			fprintf(debugfile, "%d (%d) @ %.2fs: %d   %7.4f%% %c %.4f%%\n",
 					i, mapinv[i], timestamps[i] / 1000., keep[i], metrics[i].metric,
 					keep[i] == KEPT_THRESH ? '>' : '<', thresholds[i]);
 

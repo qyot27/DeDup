@@ -1,4 +1,4 @@
-DeDup 0.12 by Loren Merritt, Copyright 2004
+DeDup 0.14 by Loren Merritt, Copyright 2004
 based on Dup 2.20 beta 1 by Donald Graft/Klaus Post
 
 DeDup is an Avisynth 2.5 filter, intended to remove duplicate frames in the
@@ -51,6 +51,9 @@ log:
 DupMC does not modify the frames passed through it. It only generates the log.
 There is no harm in seeking during the first pass: The log will be out of order,
 but DeDup doesn't care.
+Unlike Dup, which compares the last frame in a run to the first frame,
+DupMC always compares adjacent frames. You don't decide on a threshold until
+the second pass.
 
 
 
@@ -118,8 +121,9 @@ log:
 	The same file you created in the first pass.
 
 times:
-	default: none. required.
+	default: none.
 	File to write matroska timecodes to.
+	Not strictly required, but you'll need it in order to mux.
 
 timesin:
 	default: none.
@@ -173,6 +177,14 @@ threshold2=%f
 trigger2=%f
 	These are the same as the global options.
 
+range2=%d
+	The range2 parameter is taken from the frame being considered from dropping,
+not from the frames being searched over.
+
+maxdrops=%d
+maxcopies=%d
+	These values are taken from the frame at the end of the clump of dups, but
+it's better to just set them the same over the whole clump.
 
 
 
@@ -183,3 +195,6 @@ and then run the second pass (with DeDup) from that, instead of repeating
 the other filters.
 	Don't set threshold too high (unless maxcopies is small):
 Unlike the original Dup, I don't do sanity checking on slow zooms/pans/fades.
+	The second pass options 'times' and 'debug' take effect as soon as you
+open the avs. You don't have to play/encode the video in order to produce
+those files.

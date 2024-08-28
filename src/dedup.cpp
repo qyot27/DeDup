@@ -24,7 +24,7 @@
 #define NORM (235*BLKSIZE*BLKSIZE)
 #define MAX_COPIES 20
 #define DUPVERSION "2.20 beta 1"
-#define MYVERSION "0.13"
+#define MYVERSION "0.14"
 #define VERSION_PRINTF "DeDup %s by Loren Merritt, based on Dup %s by Donald Graft/Klaus Post, Copyright 2004\n", MYVERSION, DUPVERSION
 
 struct FRAMEINFO
@@ -94,7 +94,7 @@ public:
 				env->ThrowError("DeDup: failed to open timefile");
 		}
 		else
-			env->ThrowError("DeDup: option 'times' required");
+			timefile = NULL;
 		if (_timeinfile)
 		{
 			timeinfile = fopen(_timeinfile, "r");
@@ -166,7 +166,6 @@ public:
 		metrics = NULL;
 		keep = NULL;
 		mapend = mapstart = mapinv = NULL;
-		thresholds = threshold2s = trigger2s = NULL;
 
 		/* For safety in case someone came in without doing it. */
 		__asm emms;
@@ -180,9 +179,6 @@ public:
 		if (mapend)       delete [] mapend;
 		if (mapstart)     delete [] mapstart;
 		if (mapinv)       delete [] mapinv;
-		if (thresholds)   delete [] thresholds;
-		if (threshold2s)  delete [] threshold2s;
-		if (trigger2s)    delete [] trigger2s;
 	}
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* _env);
     void isse_scenechange(const BYTE* c_plane, const BYTE* tplane, int height, int width, int pitch,  int t_pitch, int* blk_values);
@@ -204,11 +200,6 @@ private:
 	FILE* timefile;    // save matroska timecodes
 	FILE* ovrfile;     // override calculated dups (or just about any other option)
 	FILE* debugfile;   // report decisions here
-
-	//// Per-frame options
-	float* thresholds;
-	float* threshold2s;
-	float* trigger2s;
 
 	//// State
 	struct FRAMEINFO cache[MAX_COPIES+1];
@@ -287,19 +278,24 @@ void Dup::LoadFirstPass()
 	unsigned int frame_no, frame_next;
 	char buf[201];
 
+	float* thresholds = new float [num_iframes];
+	float* threshold2s = new float [num_iframes];
+	float* trigger2s = new float [num_iframes];
+	int* range2s = new int [num_iframes];
+	int* maxdropss = new int [num_iframes];
+	int* maxcopiess = new int [num_iframes];
+
 	metrics = new FRAMEMETRIC [num_iframes];
 	metrics_done = new bool [num_iframes];
 	keep = new char [num_iframes];
 	mapend = new unsigned int [num_iframes];
 	mapstart = new unsigned int [num_iframes+1];
 	mapinv = new unsigned int [num_iframes];
-	thresholds = new float [num_iframes];
-	threshold2s = new float [num_iframes];
-	trigger2s = new float [num_iframes];
 
 	if(metrics == NULL || keep == NULL || mapend == NULL || mapstart == NULL
 			|| mapinv == NULL || metrics_done == NULL || thresholds == NULL
-			|| threshold2s == NULL || trigger2s == NULL)
+			|| threshold2s == NULL || trigger2s == NULL || range2s == NULL
+			|| maxdropss == NULL || maxcopiess == NULL)
 		env->ThrowError("DeDup: cannot allocate needed memory");
 
 	memset(metrics_done, 0, num_iframes * sizeof(bool));
@@ -309,6 +305,9 @@ void Dup::LoadFirstPass()
 		thresholds[i] = threshold;
 		threshold2s[i] = threshold2;
 		trigger2s[i] = trigger2;
+		range2s[i] = range2;
+		maxdropss[i] = maxdrops;
+		maxcopiess[i] = maxcopies;
 	}
 
 	// read stats from first pass
@@ -335,36 +334,77 @@ void Dup::LoadFirstPass()
 	if(ovrfile != NULL)
 	{
 		char* pos;
-		//int len;
-
+		int linenum = 0;
 		while(fgets(buf, 200, ovrfile))
 		{
-			if(buf[0] == '#')
+			linenum++;
+			pos = buf + strspn(buf, " \t");
+			if(pos[0] == '#' || pos[0] == '\0')
 				continue;
 
 			unsigned int frame0, frame1;
-			if(sscanf(buf, " %u-%u", &frame0, &frame1) == 2)
-				;// do nothing
+			if(sscanf(pos, " %u-%u", &frame0, &frame1) == 2)
+			{
+				if(frame0 > frame1)
+					ThrowError("override section of negative length at line %d", linenum);
+			}
 			else if(sscanf(buf, " %u", &frame0))
 				frame1 = frame0;
 			else
-				//invalid line
-				continue;
+				ThrowError("can't parse override at line %d", linenum);
 
-			pos = buf + strspn(buf, " \t");
 			pos += strcspn(pos, " \t");
 			pos += strspn(pos, " \t");
-			while(*pos != '\0')
+			while(pos[0] != '\0')
 			{
-				if(sscanf(pos, "threshold=%f", &thresholds[frame0]))
+				if(pos[0] == '#')
+					break;
+				if(sscanf(pos, "threshold=%f", &thresholds[frame0])
+				   || sscanf(pos, "thresh=%f", &thresholds[frame0]))
 					for(i=frame0+1; i<=frame1 && i < num_iframes; i++)
+					{
 						thresholds[i] = thresholds[frame0];
-				else if(sscanf(pos, "threshold2=%f", &threshold2s[frame0]))
+						if(thresholds[i] > threshold2s[i])
+							threshold2s[i] = thresholds[i];
+					}
+				else if(sscanf(pos, "threshold2=%f", &threshold2s[frame0])
+				        || sscanf(pos, "thresh2=%f", &threshold2s[frame0]))
 					for(i=frame0+1; i<=frame1 && i < num_iframes; i++)
+					{
 						threshold2s[i] = threshold2s[frame0];
+						if(range2s[i] <= 0)
+							range2s[i] = range2;
+						if(thresholds[i] > threshold2s[i])
+							thresholds[i] = threshold2s[i];
+					}
 				else if(sscanf(pos, "trigger2=%f", &trigger2s[frame0]))
 					for(i=frame0+1; i<=frame1 && i < num_iframes; i++)
+					{
 						trigger2s[i] = trigger2s[frame0];
+						if(range2s[i] <= 0)
+							range2s[i] = range2;
+					}
+				else if(sscanf(pos, "range2=%d", &range2s[frame0]))
+				{
+					if(range2s[frame0] < 0)
+						ThrowError("range2 < 0 at line %d", linenum);
+					for(i=frame0+1; i<=frame1 && i < num_iframes; i++)
+						range2s[i] = range2s[frame0];
+				}
+				else if(sscanf(pos, "maxdrops=%d", &maxdropss[frame0]))
+				{
+					if(maxdropss[frame0] < 0)
+						ThrowError("maxdrops < 0 at line %d", linenum);
+					for(i=frame0+1; i<=frame1 && i < num_iframes; i++)
+						maxdropss[i] = maxdropss[frame0];
+				}
+				else if(sscanf(pos, "maxcopies=%d", &maxcopiess[frame0]))
+				{
+					if(maxcopiess[frame0] < 0)
+						ThrowError("maxcopies < 0 at line %d", linenum);
+					for(i=frame0+1; i<=frame1 && i < num_iframes; i++)
+						maxcopiess[i] = maxcopiess[frame0];
+				}
 				// word of the form /[kd]+/ forces keep or drop
 				// FIXME: doesn't check for non-kd letters
 				else if(pos[0] == 'k' || pos[0] == 'd')
@@ -373,18 +413,26 @@ void Dup::LoadFirstPass()
 						if(pos[j] != 'k' && pos[j] != 'd')
 							j = 0;
 						if(pos[j] == 'k')
+						{
 							thresholds[i] = threshold2s[i] = -1.0f;
+							range2s[i] = 0;
+						}
 						else
+						{
 							thresholds[i] = threshold2s[i] = 101.0f;
+							range2s[i] = 0;
+						}
 						metrics_done[i] = true;
 					}
+				else
+					ThrowError("unrecognized override at line %d", linenum);
 
 				pos += strcspn(pos, " \t");
 				pos += strspn(pos, " \t");
-			}
-		}
+			} // End while(pos[0] != '\0')
+		} // End while(fgets(buf, 200, ovrfile))
 		fclose(ovrfile);
-	}
+	} // End if(ovrfile)
 
 	// warn of any holes in the first pass not filled by overrides
 	for(i=0; i<num_iframes; i++)
@@ -410,30 +458,37 @@ void Dup::LoadFirstPass()
 	{
 		numdropped++;
 
-		// dual threshold, for high motion scenes
-		if(range2 > 0)
+		// dual threshold, for high motion / low fps
+		float& thresh = thresholds[i];
+		float thresh2 = threshold2s ? threshold2s[i] : threshold2;
+		float trig2 = trigger2s ? trigger2s[i] : trigger2;
+		int r2 = range2s ? range2s[i] : range2;
+		int maxcopy = maxcopiess ? maxcopiess[i] : maxcopies;
+		int maxdrop = maxdropss ? maxdropss[i] : maxdrops;
+
+		if(r2 > 0)
 		{
 			float neighbor0 = 0., neighbor1 = 0.;
-			for(j = i<range2 ? 0 : i-range2; j<i; j++)
+			for(j = (int)i<r2 ? 0 : i-r2; j<i; j++)
 				if(metrics[j].metric > neighbor0)
 					neighbor0 = metrics[j].metric;
-			for(j = i+range2 > num_iframes-1 ? num_iframes-1 : i+range2; j>i; j--)
+			for(j = i+r2 > num_iframes-1 ? num_iframes-1 : i+r2; j>i; j--)
 				if(metrics[j].metric > neighbor1)
 					neighbor1 = metrics[j].metric;
 			if(neighbor1 < neighbor0)
 				neighbor0 = neighbor1;
-			if(neighbor0 > threshold2s[i])
+			if(neighbor0 > thresh2)
 			{
-				float ratio = (neighbor0 - threshold2s[i]) / (trigger2s[i] - threshold2s[i]);
+				float ratio = (neighbor0 - threshold2s[i]) / (trig2 - thresh2);
 				ratio = ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
-				thresholds[i] = threshold2s[i] * ratio + thresholds[i] * (1-ratio);
+				thresh = thresh2 * ratio + thresh * (1-ratio);
 			}
 		}
 
 		int status = DROPPED;
-		if(metrics[i].metric >= thresholds[i])
+		if(metrics[i].metric >= thresh)
 			status = KEPT_THRESH;
-		else if(numdropped > maxcopies)
+		else if(numdropped >= maxcopy)
 			status = KEPT_MAXCOPIES;
 
 		if(status != DROPPED)
@@ -443,7 +498,7 @@ void Dup::LoadFirstPass()
 			mapstart[num_oframes+1] = i+1;
 			num_oframes++;
 
-			if(numdropped > maxdrops)
+			if(numdropped > maxdrop)
 			{
 				int numsplits = 1 + (numdropped-1) / maxdrops;
 				for(int j=1; j<numsplits; j++)
@@ -458,7 +513,7 @@ void Dup::LoadFirstPass()
 
 			numdropped = 0;
 		}
-	}
+	} // End for(i=0; i<num_iframes; i++)
 	if(dec)
 		vi.num_frames = num_oframes;
 
@@ -525,7 +580,7 @@ void Dup::LoadFirstPass()
 					env->ThrowError("DeDup: timeinfile not a valid Matroska timecode v2 file");
 			}
 		}
-	} // end if timeinfile
+	} // End if(timeinfile)
 	else
 	{
 		double mspf = 1000. * double(vi.fps_denominator) / vi.fps_numerator;
@@ -533,14 +588,17 @@ void Dup::LoadFirstPass()
 			timestamps[i] = i * mspf;
 	}
 
-	// print timestamps
-	fprintf(timefile, "# timecode format v2\n");
-	fprintf(timefile, "%.6lf\n", 0.);
-	for(i=0; i<num_iframes-1; i++)
-		if(keep[i])
-			fprintf(timefile, "%.6lf\n", timestamps[i+1]);
-	fclose(timefile);
-	timefile = NULL;
+	if(timefile != NULL)
+	{
+		// print timestamps
+		fprintf(timefile, "# timecode format v2\n");
+		fprintf(timefile, "%.6lf\n", 0.);
+		for(i=0; i<num_iframes-1; i++)
+			if(keep[i])
+				fprintf(timefile, "%.6lf\n", timestamps[i+1]);
+		fclose(timefile);
+		timefile = NULL;
+	}
 
 	if(debugfile)
 	{
@@ -554,7 +612,14 @@ void Dup::LoadFirstPass()
 		fclose(debugfile);
 		debugfile = NULL;
 	}
-}
+
+	delete [] thresholds;
+	delete [] threshold2s;
+	delete [] trigger2s;
+	delete [] range2s;
+	delete [] maxdropss;
+	delete [] maxcopiess;
+} // End Dup::LoadFirstPass()
 
 void Dup::CalcMetric(int n)
 {
@@ -711,23 +776,23 @@ PVideoFrame Dup::ConstructFrame(int n)
 
 	if (show)
 	{
-		/* Generate show data overlay. */
+		/* Generate text overlay. */
+		env->MakeWritable(&copyframe);
 		sprintf(buf, "DeDup %s", MYVERSION);
 		DrawString(copyframe, 0, 0, buf);
 		sprintf(buf, "Copyright 2004 Loren Merritt/Donald Graft/Klaus Post");
 		DrawString(copyframe, 0, 1, buf);
 		sprintf(buf, "frm %d: diff from frm %d = %2.2f%%", ni, ni+1, metrics[ni].metric);
 		DrawString(copyframe, 0, 3, buf);
-		if (!dec)
-			DrawBox(copyframe, metrics[ni].highest_x, metrics[ni].highest_y, (metrics[ni].metric < threshold));
+		//if (!dec)
+		//	DrawBox(copyframe, metrics[ni].highest_x, metrics[ni].highest_y, (metrics[ni].metric < threshold));
 		if (blend && n1 > n0)
-			sprintf(buf, "Blending %d through %d", n0, n1);
+			sprintf(buf, "ofrm %d: blending %d through %d", n, n0, n1);
 		else
-			sprintf(buf, "Using frm %d", n1);
+			sprintf(buf, "ofrm %d: using ifrm %d", n, n1);
 		DrawString(copyframe, 0, 4, buf);
 	}
 
-	/* Return the appropriate frame. */
 	return copyframe;
 }
 

@@ -1492,3 +1492,4 @@ const char* __stdcall AvisynthPluginInit3(IScriptEnvironment * env, const AVS_Li
     env->AddFunction("DupMC", "c[chroma]b[log]s[search]i", Create_DupMetric, 0);
     return 0;
 }
+

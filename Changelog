@@ -1,3 +1,8 @@
+No version change (2021-02-27):
+Avisynth 2.6 interface.
+x64 build.
+Added version.
+
 DeDup 0.17 (2004-11-7):
 decwhich<3 was keeping the wrong input frame.
 Improved neighborhood display.

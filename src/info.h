@@ -1559,11 +1559,11 @@ unsigned short font[][20] = {
 	}
 };
 
-#ifndef Pixel32
+//#ifndef Pixel32
 
-typedef unsigned long Pixel32;
+//typedef unsigned long Pixel32;
 
-#endif
+//#endif
 
 void DrawDigit(PVideoFrame &dst, int x, int y, int num)
 {
